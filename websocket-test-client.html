@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test Client - Collaborative Spreadsheet</title>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .card h2 {
+            color: #333;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.3s;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        
+        button:hover {
+            background: #5a67d8;
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        button.danger {
+            background: #e53e3e;
+        }
+        
+        button.danger:hover {
+            background: #c53030;
+        }
+        
+        button.success {
+            background: #48bb78;
+        }
+        
+        button.success:hover {
+            background: #38a169;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+        
+        .status.connected {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+        
+        .status.disconnected {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 1px solid #fc8181;
+        }
+        
+        .status.connecting {
+            background: #feebc8;
+            color: #7c2d12;
+            border: 1px solid #fbd38d;
+        }
+        
+        .events-log {
+            height: 300px;
+            overflow-y: auto;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            padding: 10px;
+            background: #f7fafc;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        
+        .event-item {
+            padding: 5px;
+            margin-bottom: 5px;
+            border-radius: 3px;
+            word-wrap: break-word;
+        }
+        
+        .event-item.sent {
+            background: #e6fffa;
+            border-left: 3px solid #4fd1c5;
+        }
+        
+        .event-item.received {
+            background: #f0fff4;
+            border-left: 3px solid #68d391;
+        }
+        
+        .event-item.error {
+            background: #fff5f5;
+            border-left: 3px solid #fc8181;
+        }
+        
+        .event-item.system {
+            background: #edf2f7;
+            border-left: 3px solid #a0aec0;
+        }
+        
+        .user-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .user-badge {
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .user-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        
+        .cell-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 5px;
+            margin-top: 10px;
+        }
+        
+        .cell-input {
+            padding: 5px;
+            border: 1px solid #e0e0e0;
+            border-radius: 3px;
+            text-align: center;
+            font-size: 12px;
+        }
+        
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        
+        .button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 WebSocket Test Client - Collaborative Spreadsheet</h1>
+        
+        <div class="grid">
+            <!-- Connection Panel -->
+            <div class="card">
+                <h2>📡 Connection</h2>
+                <div id="connectionStatus" class="status disconnected">
+                    Disconnected
+                </div>
+                
+                <div class="control-group">
+                    <label for="serverUrl">Server URL:</label>
+                    <input type="text" id="serverUrl" value="http://localhost:3000" />
+                </div>
+                
+                <div class="control-group">
+                    <label for="authToken">Auth Token:</label>
+                    <input type="text" id="authToken" placeholder="Bearer token..." />
+                </div>
+                
+                <div class="control-group">
+                    <label for="spreadsheetId">Spreadsheet ID:</label>
+                    <input type="text" id="spreadsheetId" value="550e8400-e29b-41d4-a716-446655440000" />
+                </div>
+                
+                <div class="button-group">
+                    <button id="connectBtn" onclick="connect()">Connect</button>
+                    <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+                    <button id="initBtn" onclick="initConnection()" disabled class="success">Initialize</button>
+                </div>
+            </div>
+            
+            <!-- User Presence Panel -->
+            <div class="card">
+                <h2>👥 User Presence</h2>
+                <div class="control-group">
+                    <button onclick="getUsers()">Get Users</button>
+                    <button onclick="getCursors()">Get Cursors</button>
+                    <button onclick="getSelections()">Get Selections</button>
+                </div>
+                <div id="userList" class="user-list"></div>
+            </div>
+        </div>
+        
+        <div class="grid">
+            <!-- Cell Operations Panel -->
+            <div class="card">
+                <h2>📊 Cell Operations</h2>
+                
+                <div class="control-group">
+                    <label>Quick Cell Updates:</label>
+                    <div class="cell-grid">
+                        <input type="text" class="cell-input" placeholder="A1" data-row="0" data-col="0" />
+                        <input type="text" class="cell-input" placeholder="B1" data-row="0" data-col="1" />
+                        <input type="text" class="cell-input" placeholder="C1" data-row="0" data-col="2" />
+                        <input type="text" class="cell-input" placeholder="D1" data-row="0" data-col="3" />
+                        <input type="text" class="cell-input" placeholder="E1" data-row="0" data-col="4" />
+                    </div>
+                    <button onclick="sendCellChanges()" class="success">Send Cell Changes</button>
+                </div>
+                
+                <div class="control-group">
+                    <label>Manual Cell Update:</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="number" id="cellRow" placeholder="Row" style="width: 100px;" min="0" />
+                        <input type="number" id="cellCol" placeholder="Col" style="width: 100px;" min="0" />
+                        <input type="text" id="cellValue" placeholder="Value" style="flex: 1;" />
+                    </div>
+                    <button onclick="sendCellChange()">Update Cell</button>
+                    <button onclick="sendBulkChanges()">Send Bulk (5 cells)</button>
+                </div>
+                
+                <div class="control-group">
+                    <label>Cursor & Selection:</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="number" id="cursorRow" placeholder="Cursor Row" style="width: 120px;" min="0" />
+                        <input type="number" id="cursorCol" placeholder="Cursor Col" style="width: 120px;" min="0" />
+                    </div>
+                    <button onclick="moveCursor()">Move Cursor</button>
+                    <button onclick="selectRange()">Select Range (3x3)</button>
+                    <button onclick="clearSelection()">Clear Selection</button>
+                </div>
+            </div>
+            
+            <!-- Custom Events Panel -->
+            <div class="card">
+                <h2>🎮 Custom Events</h2>
+                
+                <div class="control-group">
+                    <label for="eventName">Event Name:</label>
+                    <input type="text" id="eventName" placeholder="e.g., chat-message" />
+                </div>
+                
+                <div class="control-group">
+                    <label for="eventData">Event Data (JSON):</label>
+                    <textarea id="eventData" rows="4" placeholder='{"message": "Hello!"}'></textarea>
+                </div>
+                
+                <button onclick="sendCustomEvent()">Send Event</button>
+                <button onclick="pingServer()">Ping</button>
+                <button onclick="sendStatusChange()">Change Status</button>
+            </div>
+        </div>
+        
+        <!-- Events Log -->
+        <div class="card full-width">
+            <h2>📋 Events Log</h2>
+            <div class="button-group">
+                <button onclick="clearLog()">Clear Log</button>
+                <button onclick="exportLog()">Export Log</button>
+            </div>
+            <div id="eventsLog" class="events-log"></div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let isConnected = false;
+        let eventLog = [];
+        
+        function updateStatus(status, message) {
+            const statusEl = document.getElementById('connectionStatus');
+            statusEl.className = `status ${status}`;
+            statusEl.textContent = message;
+            
+            // Update button states
+            document.getElementById('connectBtn').disabled = status === 'connected';
+            document.getElementById('disconnectBtn').disabled = status !== 'connected';
+            document.getElementById('initBtn').disabled = status !== 'connected';
+            
+            isConnected = status === 'connected';
+        }
+        
+        function logEvent(type, event, data) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = {
+                timestamp,
+                type,
+                event,
+                data
+            };
+            
+            eventLog.push(logEntry);
+            
+            const logEl = document.getElementById('eventsLog');
+            const eventItem = document.createElement('div');
+            eventItem.className = `event-item ${type}`;
+            
+            let content = `[${timestamp}] ${event}`;
+            if (data) {
+                content += `: ${JSON.stringify(data, null, 2)}`;
+            }
+            
+            eventItem.textContent = content;
+            logEl.insertBefore(eventItem, logEl.firstChild);
+            
+            // Keep only last 100 events in view
+            while (logEl.children.length > 100) {
+                logEl.removeChild(logEl.lastChild);
+            }
+        }
+        
+        function connect() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const authToken = document.getElementById('authToken').value;
+            
+            updateStatus('connecting', 'Connecting...');
+            
+            socket = io(serverUrl, {
+                transports: ['websocket'],
+                auth: {
+                    token: authToken
+                }
+            });
+            
+            // Connection events
+            socket.on('connect', () => {
+                updateStatus('connected', `Connected (ID: ${socket.id})`);
+                logEvent('system', 'Connected', { socketId: socket.id });
+            });
+            
+            socket.on('disconnect', (reason) => {
+                updateStatus('disconnected', 'Disconnected');
+                logEvent('system', 'Disconnected', { reason });
+            });
+            
+            socket.on('error', (error) => {
+                logEvent('error', 'Error', error);
+            });
+            
+            // Custom events
+            socket.on('init-success', (data) => {
+                logEvent('received', 'init-success', data);
+                updateUserList(data.existingUsers || []);
+            });
+            
+            socket.on('user-joined', (data) => {
+                logEvent('received', 'user-joined', data);
+            });
+            
+            socket.on('user-left', (data) => {
+                logEvent('received', 'user-left', data);
+            });
+            
+            socket.on('cell-updated', (data) => {
+                logEvent('received', 'cell-updated', data);
+            });
+            
+            socket.on('cursor-updated', (data) => {
+                logEvent('received', 'cursor-updated', data);
+            });
+            
+            socket.on('selection-updated', (data) => {
+                logEvent('received', 'selection-updated', data);
+            });
+            
+            socket.on('users-list', (data) => {
+                logEvent('received', 'users-list', data);
+                updateUserList(data.users || []);
+            });
+            
+            socket.on('all-cursors', (data) => {
+                logEvent('received', 'all-cursors', data);
+            });
+            
+            socket.on('all-selections', (data) => {
+                logEvent('received', 'all-selections', data);
+            });
+            
+            socket.on('cell-change-ack', (data) => {
+                logEvent('received', 'cell-change-ack', data);
+            });
+            
+            socket.on('pong', (data) => {
+                logEvent('received', 'pong', data);
+            });
+            
+            socket.on('force-disconnect', (data) => {
+                logEvent('received', 'force-disconnect', data);
+            });
+        }
+        
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+            }
+        }
+        
+        function initConnection() {
+            if (!socket) return;
+            
+            const token = document.getElementById('authToken').value;
+            const spreadsheetId = document.getElementById('spreadsheetId').value;
+            
+            socket.emit('init', {
+                token,
+                spreadsheetId
+            });
+            
+            logEvent('sent', 'init', { spreadsheetId });
+        }
+        
+        function sendCellChange() {
+            if (!socket) return;
+            
+            const row = parseInt(document.getElementById('cellRow').value) || 0;
+            const col = parseInt(document.getElementById('cellCol').value) || 0;
+            const value = document.getElementById('cellValue').value;
+            
+            const data = {
+                row,
+                column: col,
+                value,
+                changeType: 'value'
+            };
+            
+            socket.emit('cell-change', data);
+            logEvent('sent', 'cell-change', data);
+        }
+        
+        function sendCellChanges() {
+            if (!socket) return;
+            
+            const cells = document.querySelectorAll('.cell-input');
+            cells.forEach(cell => {
+                if (cell.value) {
+                    const data = {
+                        row: parseInt(cell.dataset.row),
+                        column: parseInt(cell.dataset.col),
+                        value: cell.value,
+                        changeType: 'value'
+                    };
+                    socket.emit('cell-change', data);
+                    logEvent('sent', 'cell-change', data);
+                }
+            });
+        }
+        
+        function sendBulkChanges() {
+            if (!socket) return;
+            
+            const changes = [];
+            for (let i = 0; i < 5; i++) {
+                changes.push({
+                    row: i,
+                    column: 0,
+                    value: `Bulk value ${i + 1}`,
+                    changeType: 'value'
+                });
+            }
+            
+            socket.emit('bulk-cell-change', { changes });
+            logEvent('sent', 'bulk-cell-change', { changes });
+        }
+        
+        function moveCursor() {
+            if (!socket) return;
+            
+            const row = parseInt(document.getElementById('cursorRow').value) || 0;
+            const col = parseInt(document.getElementById('cursorCol').value) || 0;
+            
+            const data = {
+                row,
+                column: col
+            };
+            
+            socket.emit('cursor-move', data);
+            logEvent('sent', 'cursor-move', data);
+        }
+        
+        function selectRange() {
+            if (!socket) return;
+            
+            const row = parseInt(document.getElementById('cursorRow').value) || 0;
+            const col = parseInt(document.getElementById('cursorCol').value) || 0;
+            
+            const data = {
+                startRow: row,
+                startColumn: col,
+                endRow: row + 2,
+                endColumn: col + 2
+            };
+            
+            socket.emit('selection-change', data);
+            logEvent('sent', 'selection-change', data);
+        }
+        
+        function clearSelection() {
+            if (!socket) return;
+            
+            socket.emit('clear-selection');
+            logEvent('sent', 'clear-selection', {});
+        }
+        
+        function getUsers() {
+            if (!socket) return;
+            
+            socket.emit('get-users');
+            logEvent('sent', 'get-users', {});
+        }
+        
+        function getCursors() {
+            if (!socket) return;
+            
+            socket.emit('get-cursors');
+            logEvent('sent', 'get-cursors', {});
+        }
+        
+        function getSelections() {
+            if (!socket) return;
+            
+            socket.emit('get-selections');
+            logEvent('sent', 'get-selections', {});
+        }
+        
+        function pingServer() {
+            if (!socket) return;
+            
+            socket.emit('ping');
+            logEvent('sent', 'ping', {});
+        }
+        
+        function sendStatusChange() {
+            if (!socket) return;
+            
+            const statuses = ['active', 'idle', 'away'];
+            const status = statuses[Math.floor(Math.random() * statuses.length)];
+            
+            socket.emit('status-change', { status });
+            logEvent('sent', 'status-change', { status });
+        }
+        
+        function sendCustomEvent() {
+            if (!socket) return;
+            
+            const eventName = document.getElementById('eventName').value;
+            const eventData = document.getElementById('eventData').value;
+            
+            if (!eventName) {
+                alert('Please enter an event name');
+                return;
+            }
+            
+            let data = {};
+            if (eventData) {
+                try {
+                    data = JSON.parse(eventData);
+                } catch (e) {
+                    alert('Invalid JSON in event data');
+                    return;
+                }
+            }
+            
+            socket.emit(eventName, data);
+            logEvent('sent', eventName, data);
+        }
+        
+        function updateUserList(users) {
+            const userListEl = document.getElementById('userList');
+            userListEl.innerHTML = '';
+            
+            users.forEach(user => {
+                const badge = document.createElement('div');
+                badge.className = 'user-badge';
+                badge.style.backgroundColor = user.color ? `${user.color}20` : '#f0f0f0';
+                badge.style.border = `1px solid ${user.color || '#ccc'}`;
+                
+                const indicator = document.createElement('span');
+                indicator.className = 'user-indicator';
+                indicator.style.backgroundColor = user.color || '#ccc';
+                
+                badge.appendChild(indicator);
+                badge.appendChild(document.createTextNode(user.userName || user.userId));
+                
+                userListEl.appendChild(badge);
+            });
+        }
+        
+        function clearLog() {
+            document.getElementById('eventsLog').innerHTML = '';
+            eventLog = [];
+            logEvent('system', 'Log cleared', {});
+        }
+        
+        function exportLog() {
+            const dataStr = JSON.stringify(eventLog, null, 2);
+            const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+            
+            const exportFileDefaultName = `websocket-log-${Date.now()}.json`;
+            
+            const linkElement = document.createElement('a');
+            linkElement.setAttribute('href', dataUri);
+            linkElement.setAttribute('download', exportFileDefaultName);
+            linkElement.click();
+        }
+        
+        // Auto-connect if all fields are filled
+        window.addEventListener('load', () => {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const spreadsheetId = document.getElementById('spreadsheetId').value;
+            
+            if (serverUrl && spreadsheetId) {
+                // Auto-connect is disabled by default, uncomment to enable
+                // connect();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    container_name: spreadsheet-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - WS_PORT=3001
+      - EXTERNAL_API_URL=${EXTERNAL_API_URL:-https://api-epm.example.com}
+      - WS_CORS_ORIGIN=${WS_CORS_ORIGIN:-http://localhost:4200}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    restart: unless-stopped
+    networks:
+      - spreadsheet-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  spreadsheet-network:
+    driver: bridge

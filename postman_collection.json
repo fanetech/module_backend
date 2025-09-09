@@ -1,0 +1,532 @@
+{
+  "info": {
+    "name": "Collaborative Spreadsheet Backend",
+    "description": "API collection for testing the collaborative spreadsheet backend module",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{auth_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "ws_url",
+      "value": "ws://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "spreadsheet_id",
+      "value": "550e8400-e29b-41d4-a716-446655440000",
+      "type": "string"
+    },
+    {
+      "key": "auth_token",
+      "value": "your-jwt-token-here",
+      "type": "string"
+    },
+    {
+      "key": "socket_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "item": [
+        {
+          "name": "Health Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Check if the server is healthy and running"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Spreadsheet Operations",
+      "item": [
+        {
+          "name": "Get Spreadsheet Data",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}"]
+            },
+            "description": "Retrieve spreadsheet data from the external API"
+          },
+          "response": []
+        },
+        {
+          "name": "Save Spreadsheet Changes",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": [\n    {\n      \"cellId\": \"A1\",\n      \"row\": 0,\n      \"column\": 0,\n      \"oldValue\": null,\n      \"newValue\": \"Hello World\",\n      \"timestamp\": {{$timestamp}},\n      \"userId\": \"user1\",\n      \"changeType\": \"value\"\n    },\n    {\n      \"cellId\": \"B1\",\n      \"row\": 0,\n      \"column\": 1,\n      \"oldValue\": null,\n      \"newValue\": 42,\n      \"timestamp\": {{$timestamp}},\n      \"userId\": \"user1\",\n      \"changeType\": \"value\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/save",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "save"]
+            },
+            "description": "Save changes to the spreadsheet"
+          },
+          "response": []
+        },
+        {
+          "name": "Batch Update",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operations\": [\n    {\n      \"id\": \"op-001\",\n      \"type\": \"update\",\n      \"cellId\": \"A1\",\n      \"row\": 0,\n      \"column\": 0,\n      \"value\": \"Batch Update 1\",\n      \"timestamp\": {{$timestamp}},\n      \"userId\": \"user1\",\n      \"version\": 1\n    },\n    {\n      \"id\": \"op-002\",\n      \"type\": \"update\",\n      \"cellId\": \"A2\",\n      \"row\": 1,\n      \"column\": 0,\n      \"value\": \"Batch Update 2\",\n      \"timestamp\": {{$timestamp}},\n      \"userId\": \"user1\",\n      \"version\": 1\n    },\n    {\n      \"id\": \"op-003\",\n      \"type\": \"format\",\n      \"cellId\": \"A3\",\n      \"row\": 2,\n      \"column\": 0,\n      \"format\": {\n        \"bold\": true,\n        \"textColor\": \"#FF0000\"\n      },\n      \"timestamp\": {{$timestamp}},\n      \"userId\": \"user1\",\n      \"version\": 1\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/batch",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "batch"]
+            },
+            "description": "Apply batch operations to the spreadsheet"
+          },
+          "response": []
+        },
+        {
+          "name": "Check Permissions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/permissions",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "permissions"]
+            },
+            "description": "Check user permissions for the spreadsheet"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Pending Changes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/pending",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "pending"]
+            },
+            "description": "Get pending changes that haven't been saved yet"
+          },
+          "response": []
+        },
+        {
+          "name": "Force Sync",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/sync",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "sync"]
+            },
+            "description": "Force synchronization of pending changes"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Collaboration",
+      "item": [
+        {
+          "name": "Get Connected Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/users",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "users"]
+            },
+            "description": "Get list of users currently connected to the spreadsheet"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Session Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/session",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "session"]
+            },
+            "description": "Get current session information for the spreadsheet"
+          },
+          "response": []
+        },
+        {
+          "name": "Get User Presence",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/presence",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "presence"]
+            },
+            "description": "Get user presence information including cursor positions"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Session History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/history",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "history"]
+            },
+            "description": "Get session history for the spreadsheet"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Collaboration Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/collaboration/stats",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaboration", "stats"]
+            },
+            "description": "Get overall collaboration statistics"
+          },
+          "response": []
+        },
+        {
+          "name": "Broadcast Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event\": \"system-message\",\n  \"data\": {\n    \"message\": \"Spreadsheet will be saved in 5 minutes\",\n    \"type\": \"info\",\n    \"timestamp\": {{$timestamp}}\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/collaboration/broadcast/{{spreadsheet_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaboration", "broadcast", "{{spreadsheet_id}}"]
+            },
+            "description": "Broadcast a message to all connected users"
+          },
+          "response": []
+        },
+        {
+          "name": "Send to Specific User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event\": \"private-message\",\n  \"data\": {\n    \"message\": \"Your changes have been saved\",\n    \"timestamp\": {{$timestamp}}\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/collaboration/send/{{socket_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaboration", "send", "{{socket_id}}"]
+            },
+            "description": "Send a message to a specific user by socket ID"
+          },
+          "response": []
+        },
+        {
+          "name": "Disconnect User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Session expired\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/collaboration/disconnect/{{socket_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaboration", "disconnect", "{{socket_id}}"]
+            },
+            "description": "Force disconnect a specific user"
+          },
+          "response": []
+        },
+        {
+          "name": "Cleanup Sessions",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/collaboration/cleanup",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaboration", "cleanup"]
+            },
+            "description": "Clean up inactive sessions"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Error Cases",
+      "item": [
+        {
+          "name": "No Auth Header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}"]
+            },
+            "description": "Test request without authorization header"
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid Spreadsheet ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/invalid-id-format",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "invalid-id-format"]
+            },
+            "description": "Test with invalid spreadsheet ID format"
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid Batch Data",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": \"not-an-array\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/save",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "save"]
+            },
+            "description": "Test with invalid batch data format"
+          },
+          "response": []
+        },
+        {
+          "name": "Route Not Found",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/nonexistent",
+              "host": ["{{base_url}}"],
+              "path": ["api", "nonexistent"]
+            },
+            "description": "Test 404 error handling"
+          },
+          "response": []
+        },
+        {
+          "name": "Too Many Changes",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": {{$randomLoremWords}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/spreadsheets/{{spreadsheet_id}}/save",
+              "host": ["{{base_url}}"],
+              "path": ["api", "spreadsheets", "{{spreadsheet_id}}", "save"]
+            },
+            "description": "Test with too many changes (>1000) - You'll need to manually create a large array"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Set dynamic variables",
+          "pm.variables.set('timestamp', Date.now());",
+          "",
+          "// You can set your auth token here",
+          "// pm.variables.set('auth_token', 'your-actual-token-here');"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Global test for response time",
+          "pm.test('Response time is less than 2000ms', function () {",
+          "    pm.expect(pm.response.responseTime).to.be.below(2000);",
+          "});",
+          "",
+          "// Store socket_id if present in response",
+          "if (pm.response.json().data && pm.response.json().data.socketId) {",
+          "    pm.collectionVariables.set('socket_id', pm.response.json().data.socketId);",
+          "}"
+        ]
+      }
+    }
+  ]
+}
