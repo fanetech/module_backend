@@ -1,183 +1,86 @@
-import express, { Application } from 'express';
+import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
+import rateLimit from 'express-rate-limit';
+import dotenv from 'dotenv';
 import { SpreadsheetController } from './controllers/spreadsheet.controller';
 import { CollaborationController } from './controllers/collaboration.controller';
-import { proxyMiddleware, optionalAuth } from './middleware/api-proxy.middleware';
-import { 
-  validateSpreadsheetId, 
-  validateBatchChanges,
-  sanitizeInput,
-  apiRateLimiter 
-} from './middleware/validation.middleware';
-import { errorMiddleware, notFoundMiddleware } from './middleware/error.middleware';
-import { logger } from './utils/logger';
 
-export function createApp(): Application {
-  const app = express();
+dotenv.config();
 
-  // Security middleware
-  app.use(helmet({
-    crossOriginEmbedderPolicy: false,
-  }));
+const app: Application = express();
 
-  // CORS configuration
-  app.use(cors({
-    origin: process.env.WS_CORS_ORIGIN || '*',
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-  }));
+// Middleware
+app.use(helmet());
+app.use(compression());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  credentials: true
+}));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-  // Body parsing middleware
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'),
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
+  message: 'Too many requests from this IP, please try again later.'
+});
 
-  // Compression middleware
-  app.use(compression());
+app.use('/api/', limiter);
 
-  // Rate limiting
-  app.use('/api/', apiRateLimiter);
-
-  // Request sanitization
-  app.use(sanitizeInput);
-
-  // Request logging
-  app.use((req, res, next) => {
-    const startTime = Date.now();
-    
-    res.on('finish', () => {
-      const duration = Date.now() - startTime;
-      logger.logRequest(req.method, req.url, res.statusCode, duration);
-    });
-    
-    next();
+// Health check
+app.get('/health', (req: Request, res: Response) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
+});
 
-  // Health check endpoint
-  app.get('/health', (_req, res) => {
-    res.json({
-      status: 'healthy',
-      timestamp: new Date(),
-      uptime: process.uptime(),
-      environment: process.env.NODE_ENV || 'development'
-    });
+// Spreadsheet routes
+app.get('/api/spreadsheets', SpreadsheetController.getAllSpreadsheets);
+app.get('/api/spreadsheets/:id', SpreadsheetController.getSpreadsheetById);
+app.post('/api/spreadsheets', SpreadsheetController.createSpreadsheet);
+app.put('/api/spreadsheets/:id', SpreadsheetController.updateSpreadsheet);
+app.delete('/api/spreadsheets/:id', SpreadsheetController.deleteSpreadsheet);
+
+// Cell operations
+app.put('/api/spreadsheets/:id/cells/:cellId', SpreadsheetController.updateCell);
+app.post('/api/spreadsheets/:id/cells/batch', SpreadsheetController.batchUpdateCells);
+app.get('/api/spreadsheets/:id/cells/range', SpreadsheetController.getCellsInRange);
+app.get('/api/spreadsheets/:id/cells/history', SpreadsheetController.getCellHistory);
+
+// Formula calculation
+app.post('/api/spreadsheets/:id/calculate', SpreadsheetController.calculateFormulas);
+
+// Collaboration routes
+app.post('/api/collaboration/:spreadsheetId/join', CollaborationController.joinSession);
+app.post('/api/collaboration/:socketId/leave', CollaborationController.leaveSession);
+app.get('/api/collaboration/:spreadsheetId/users', CollaborationController.getActiveUsers);
+app.put('/api/collaboration/:socketId/cursor', CollaborationController.updateCursorPosition);
+app.put('/api/collaboration/:socketId/selection', CollaborationController.updateSelectionRange);
+app.delete('/api/collaboration/:socketId/selection', CollaborationController.clearSelection);
+app.post('/api/collaboration/cleanup', CollaborationController.cleanupInactiveSessions);
+app.get('/api/collaboration/stats', CollaborationController.getCollaborationStats);
+
+// Error handling middleware
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error('Error:', err);
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    message: err.message
   });
+});
 
-  // API Routes
+// 404 handler
+app.use((req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    error: 'Route not found'
+  });
+});
 
-  // Spreadsheet routes (require authentication)
-  app.get(
-    '/api/spreadsheets/:id',
-    proxyMiddleware,
-    validateSpreadsheetId,
-    SpreadsheetController.getSpreadsheet
-  );
-
-  app.put(
-    '/api/spreadsheets/:id/save',
-    proxyMiddleware,
-    validateSpreadsheetId,
-    validateBatchChanges,
-    SpreadsheetController.saveSpreadsheet
-  );
-
-  app.post(
-    '/api/spreadsheets/:id/batch',
-    proxyMiddleware,
-    validateSpreadsheetId,
-    validateBatchChanges,
-    SpreadsheetController.batchUpdate
-  );
-
-  app.get(
-    '/api/spreadsheets/:id/permissions',
-    proxyMiddleware,
-    validateSpreadsheetId,
-    SpreadsheetController.checkPermissions
-  );
-
-  app.post(
-    '/api/spreadsheets/:id/sync',
-    proxyMiddleware,
-    validateSpreadsheetId,
-    SpreadsheetController.forceSync
-  );
-
-  // Collaboration routes (optional authentication)
-  app.get(
-    '/api/spreadsheets/:id/users',
-    optionalAuth,
-    validateSpreadsheetId,
-    SpreadsheetController.getConnectedUsers
-  );
-
-  app.get(
-    '/api/spreadsheets/:id/session',
-    optionalAuth,
-    validateSpreadsheetId,
-    SpreadsheetController.getSessionInfo
-  );
-
-  app.get(
-    '/api/spreadsheets/:id/presence',
-    optionalAuth,
-    validateSpreadsheetId,
-    CollaborationController.getUserPresence
-  );
-
-  app.get(
-    '/api/spreadsheets/:id/pending',
-    optionalAuth,
-    validateSpreadsheetId,
-    SpreadsheetController.getPendingChanges
-  );
-
-  // Admin/Debug routes
-  app.get(
-    '/api/collaboration/stats',
-    optionalAuth,
-    CollaborationController.getStats
-  );
-
-  app.post(
-    '/api/collaboration/broadcast/:id',
-    proxyMiddleware,
-    validateSpreadsheetId,
-    CollaborationController.broadcast
-  );
-
-  app.post(
-    '/api/collaboration/send/:socketId',
-    proxyMiddleware,
-    CollaborationController.sendToUser
-  );
-
-  app.post(
-    '/api/collaboration/disconnect/:socketId',
-    proxyMiddleware,
-    CollaborationController.disconnectUser
-  );
-
-  app.post(
-    '/api/collaboration/cleanup',
-    proxyMiddleware,
-    CollaborationController.cleanupSessions
-  );
-
-  app.get(
-    '/api/spreadsheets/:id/history',
-    optionalAuth,
-    validateSpreadsheetId,
-    CollaborationController.getSessionHistory
-  );
-
-  // 404 handler
-  app.use(notFoundMiddleware);
-
-  // Error handler (must be last)
-  app.use(errorMiddleware);
-
-  return app;
-}
+export default app;

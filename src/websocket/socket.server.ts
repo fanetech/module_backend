@@ -1,189 +1,285 @@
-import { Server, Socket } from 'socket.io';
 import { Server as HttpServer } from 'http';
-import { createSocketServer } from '../config/socket.config';
-import { CellHandler } from './handlers/cell.handler';
-import { CursorHandler } from './handlers/cursor.handler';
-import { PresenceHandler } from './handlers/presence.handler';
-import { RoomsManager } from './rooms.manager';
-import { logger } from '../utils/logger';
+import { Server, Socket } from 'socket.io';
+import { CollaborationService } from '../services/collaboration.service';
+import { SpreadsheetService } from '../services/spreadsheet.service';
+import {
+  CellChangeEvent,
+  CursorMoveEvent,
+  SelectionChangeEvent,
+  BulkCellChangeEvent
+} from '../types/spreadsheet.types';
 
-export class SocketServer {
+export class WebSocketServer {
   private io: Server;
-  private roomsManager: RoomsManager;
 
-  constructor(httpServer: HttpServer) {
-    this.io = createSocketServer(httpServer);
-    this.roomsManager = new RoomsManager(this.io);
+  constructor(server: HttpServer) {
+    this.io = new Server(server, {
+      cors: {
+        origin: process.env.CORS_ORIGIN || '*',
+        methods: ['GET', 'POST']
+      },
+      transports: ['websocket', 'polling']
+    });
+
     this.setupEventHandlers();
   }
 
-  /**
-   * Configure tous les gestionnaires d'événements Socket.IO
-   */
   private setupEventHandlers(): void {
     this.io.on('connection', (socket: Socket) => {
-      logger.info('New socket connection', {
-        socketId: socket.id,
-        address: socket.handshake.address
-      });
+      console.log(`New client connected: ${socket.id}`);
 
-      // Événements d'initialisation et de présence
-      socket.on('init', (data) => PresenceHandler.handleInit(socket, data));
-      socket.on('disconnect', () => PresenceHandler.handleDisconnect(socket));
-      socket.on('ping', () => PresenceHandler.handlePing(socket));
-      socket.on('get-users', () => PresenceHandler.handleGetUsers(socket));
-      socket.on('status-change', (data) => PresenceHandler.handleStatusChange(socket, data));
-      socket.on('chat-message', (data) => PresenceHandler.handleChatMessage(socket, data));
+      // Handle joining a spreadsheet room
+      socket.on('join-spreadsheet', async (data: {
+        spreadsheetId: string;
+        userId: string;
+        userName?: string;
+      }) => {
+        try {
+          // Join the room
+          socket.join(`spreadsheet-${data.spreadsheetId}`);
 
-      // Événements de modification de cellules
-      socket.on('cell-change', (data) => CellHandler.handleCellChange(socket, data));
-      socket.on('cell-format', (data) => CellHandler.handleCellFormat(socket, data));
-      socket.on('bulk-cell-change', (data) => CellHandler.handleBulkCellChange(socket, data));
+          // Create/update collaboration session
+          const session = await CollaborationService.joinSession(
+            data.spreadsheetId,
+            data.userId,
+            data.userName,
+            socket.id
+          );
 
-      // Événements de curseur et sélection
-      socket.on('cursor-move', (data) => CursorHandler.handleCursorMove(socket, data));
-      socket.on('selection-change', (data) => CursorHandler.handleSelectionChange(socket, data));
-      socket.on('clear-selection', () => CursorHandler.handleClearSelection(socket));
-      socket.on('get-cursors', () => CursorHandler.handleGetCursors(socket));
-      socket.on('get-selections', () => CursorHandler.handleGetSelections(socket));
+          // Get active users
+          const activeUsers = await CollaborationService.getActiveUsers(data.spreadsheetId);
 
-      // Gestion des erreurs socket
-      socket.on('error', (error) => {
-        logger.error('Socket error', {
-          socketId: socket.id,
-          error: error.message
-        });
-      });
-
-      // Événements de room
-      socket.on('join-room', (roomId) => this.roomsManager.joinRoom(socket, roomId));
-      socket.on('leave-room', (roomId) => this.roomsManager.leaveRoom(socket, roomId));
-      socket.on('room-info', (roomId) => this.roomsManager.getRoomInfo(socket, roomId));
-    });
-
-    // Middleware pour logger tous les événements (debug)
-    if (process.env.LOG_LEVEL === 'debug') {
-      this.io.use((socket, next) => {
-        const originalEmit = socket.emit;
-        socket.emit = function(...args: any[]) {
-          logger.debug('Socket emit', {
-            socketId: socket.id,
-            event: args[0],
-            dataSize: JSON.stringify(args[1] || {}).length
+          // Notify others in the room
+          socket.to(`spreadsheet-${data.spreadsheetId}`).emit('user-joined', {
+            user_id: data.userId,
+            user_name: session.user_name,
+            color: session.color,
+            socket_id: socket.id
           });
-          return originalEmit.apply(socket, args as any);
-        };
-        next();
+
+          // Send active users list to the joining user
+          socket.emit('active-users', activeUsers);
+
+          console.log(`User ${data.userId} joined spreadsheet ${data.spreadsheetId}`);
+        } catch (error) {
+          console.error('Error joining spreadsheet:', error);
+          socket.emit('error', { message: 'Failed to join spreadsheet' });
+        }
       });
-    }
 
-    logger.info('Socket.IO server initialized');
+      // Handle leaving a spreadsheet room
+      socket.on('leave-spreadsheet', async (data: { spreadsheetId: string }) => {
+        socket.leave(`spreadsheet-${data.spreadsheetId}`);
+        await this.handleDisconnect(socket);
+      });
+
+      // Handle cell changes
+      socket.on('cell-change', async (data: CellChangeEvent) => {
+        try {
+          // Update cell in database
+          const [row, col] = this.parseCellId(data.cell_id);
+          await SpreadsheetService.updateCell(
+            data.spreadsheet_id,
+            {
+              row,
+              col,
+              value: data.value,
+              formula: data.formula,
+              format: data.format,
+              cell_id: data.cell_id
+            },
+            data.user_id
+          );
+
+          // Recalculate formulas
+          const calculatedValues = await SpreadsheetService.calculateFormulas(data.spreadsheet_id);
+
+          // Broadcast to others in the room
+          socket.to(`spreadsheet-${data.spreadsheet_id}`).emit('cell-updated', {
+            ...data,
+            computed_values: Array.from(calculatedValues.entries()).map(([cellId, value]) => ({
+              cell_id: cellId,
+              computed_value: value
+            }))
+          });
+
+          // Record activity
+          await CollaborationService.recordActivity(socket.id);
+        } catch (error) {
+          console.error('Error handling cell change:', error);
+          socket.emit('error', { message: 'Failed to update cell' });
+        }
+      });
+
+      // Handle bulk cell changes
+      socket.on('bulk-cell-change', async (data: BulkCellChangeEvent) => {
+        try {
+          // Update cells in database
+          await SpreadsheetService.batchUpdateCells({
+            spreadsheet_id: data.spreadsheet_id,
+            updates: data.changes.map(change => ({
+              cell_id: change.cell_id,
+              value: change.value,
+              formula: change.formula,
+              format: change.format
+            })),
+            user_id: data.user_id
+          });
+
+          // Recalculate formulas
+          const calculatedValues = await SpreadsheetService.calculateFormulas(data.spreadsheet_id);
+
+          // Broadcast to others in the room
+          socket.to(`spreadsheet-${data.spreadsheet_id}`).emit('bulk-updated', {
+            ...data,
+            computed_values: Array.from(calculatedValues.entries()).map(([cellId, value]) => ({
+              cell_id: cellId,
+              computed_value: value
+            }))
+          });
+
+          // Record activity
+          await CollaborationService.recordActivity(socket.id);
+        } catch (error) {
+          console.error('Error handling bulk cell change:', error);
+          socket.emit('error', { message: 'Failed to update cells' });
+        }
+      });
+
+      // Handle cursor movement
+      socket.on('cursor-move', async (data: CursorMoveEvent) => {
+        try {
+          // Update cursor position in database
+          await CollaborationService.updateCursorPosition(socket.id, data.position);
+
+          // Get session info
+          const session = await CollaborationService.getSessionBySocketId(socket.id);
+          if (session) {
+            // Broadcast to others in the room
+            socket.to(`spreadsheet-${data.spreadsheet_id}`).emit('cursor-updated', {
+              user_id: data.user_id,
+              user_name: session.user_name,
+              position: data.position,
+              color: session.color
+            });
+          }
+
+          // Record activity
+          await CollaborationService.recordActivity(socket.id);
+        } catch (error) {
+          console.error('Error handling cursor move:', error);
+        }
+      });
+
+      // Handle selection change
+      socket.on('selection-change', async (data: SelectionChangeEvent) => {
+        try {
+          // Update selection in database
+          await CollaborationService.updateSelectionRange(socket.id, data.range);
+
+          // Get session info
+          const session = await CollaborationService.getSessionBySocketId(socket.id);
+          if (session) {
+            // Broadcast to others in the room
+            socket.to(`spreadsheet-${data.spreadsheet_id}`).emit('selection-updated', {
+              user_id: data.user_id,
+              range: data.range,
+              color: session.color
+            });
+          }
+
+          // Record activity
+          await CollaborationService.recordActivity(socket.id);
+        } catch (error) {
+          console.error('Error handling selection change:', error);
+        }
+      });
+
+      // Handle clear selection
+      socket.on('clear-selection', async (data: { spreadsheet_id: string }) => {
+        try {
+          // Clear selection in database
+          await CollaborationService.clearSelection(socket.id);
+
+          // Get session info
+          const session = await CollaborationService.getSessionBySocketId(socket.id);
+          if (session) {
+            // Broadcast to others in the room
+            socket.to(`spreadsheet-${data.spreadsheet_id}`).emit('selection-cleared', {
+              user_id: session.user_id
+            });
+          }
+        } catch (error) {
+          console.error('Error clearing selection:', error);
+        }
+      });
+
+      // Handle get users request
+      socket.on('get-users', async (data: { spreadsheet_id: string }) => {
+        try {
+          const activeUsers = await CollaborationService.getActiveUsers(data.spreadsheet_id);
+          socket.emit('active-users', activeUsers);
+        } catch (error) {
+          console.error('Error getting users:', error);
+          socket.emit('error', { message: 'Failed to get active users' });
+        }
+      });
+
+      // Handle ping for keeping connection alive
+      socket.on('ping', () => {
+        socket.emit('pong');
+      });
+
+      // Handle disconnect
+      socket.on('disconnect', async () => {
+        await this.handleDisconnect(socket);
+      });
+    });
   }
 
-  /**
-   * Diffuse un message à tous les clients d'un spreadsheet
-   */
-  public broadcast(spreadsheetId: string, event: string, data: any): void {
-    this.io.to(`spreadsheet:${spreadsheetId}`).emit(event, data);
-  }
+  private async handleDisconnect(socket: Socket): Promise<void> {
+    try {
+      console.log(`Client disconnected: ${socket.id}`);
 
-  /**
-   * Envoie un message à un client spécifique
-   */
-  public sendToSocket(socketId: string, event: string, data: any): void {
-    const socket = this.io.sockets.sockets.get(socketId);
-    if (socket) {
-      socket.emit(event, data);
-    }
-  }
+      // Get session before leaving
+      const session = await CollaborationService.getSessionBySocketId(socket.id);
 
-  /**
-   * Déconnecte un client spécifique
-   */
-  public disconnectSocket(socketId: string, reason: string = 'Server initiated disconnect'): void {
-    const socket = this.io.sockets.sockets.get(socketId);
-    if (socket) {
-      socket.emit('force-disconnect', { reason });
-      socket.disconnect(true);
-    }
-  }
+      if (session) {
+        // Leave the session
+        await CollaborationService.leaveSession(socket.id);
 
-  /**
-   * Récupère les statistiques du serveur WebSocket
-   */
-  public getStats(): any {
-    const sockets = Array.from(this.io.sockets.sockets.values());
-    const rooms = Array.from(this.io.sockets.adapter.rooms.entries());
-    
-    return {
-      totalConnections: sockets.length,
-      totalRooms: rooms.filter(([name]) => name.startsWith('spreadsheet:')).length,
-      connections: sockets.map(socket => ({
-        id: socket.id,
-        connected: socket.connected,
-        spreadsheetId: socket.data.spreadsheetId,
-        userId: socket.data.userId,
-        userName: socket.data.userName
-      })),
-      rooms: rooms
-        .filter(([name]) => name.startsWith('spreadsheet:'))
-        .map(([name, sockets]) => ({
-          name,
-          spreadsheetId: name.replace('spreadsheet:', ''),
-          userCount: sockets.size
-        }))
-    };
-  }
-
-  /**
-   * Nettoie les connexions inactives
-   */
-  public cleanupInactiveConnections(): void {
-    const now = Date.now();
-    const maxInactivity = 10 * 60 * 1000; // 10 minutes
-
-    this.io.sockets.sockets.forEach((socket) => {
-      const lastActivity = socket.data.lastActivity || socket.handshake.time;
-      
-      if (now - lastActivity > maxInactivity) {
-        logger.info('Disconnecting inactive socket', {
-          socketId: socket.id,
-          inactivityDuration: now - lastActivity
+        // Notify others in the room
+        socket.to(`spreadsheet-${session.spreadsheet_id}`).emit('user-left', {
+          user_id: session.user_id,
+          user_name: session.user_name
         });
-        
-        this.disconnectSocket(socket.id, 'Inactivity timeout');
       }
-    });
+    } catch (error) {
+      console.error('Error handling disconnect:', error);
+    }
   }
 
-  /**
-   * Ferme le serveur WebSocket
-   */
-  public close(): Promise<void> {
-    return new Promise((resolve) => {
-      this.io.close(() => {
-        logger.info('Socket.IO server closed');
-        resolve();
-      });
-    });
+  // Helper: Parse cell ID
+  private parseCellId(cellId: string): [number, number] {
+    const match = cellId.match(/^([A-Z]+)(\d+)$/);
+    if (!match) {
+      throw new Error(`Invalid cell ID: ${cellId}`);
+    }
+    const col = this.letterToColumn(match[1]);
+    const row = parseInt(match[2]) - 1;
+    return [row, col];
+  }
+
+  // Helper: Convert letter to column index
+  private letterToColumn(letter: string): number {
+    let col = 0;
+    for (let i = 0; i < letter.length; i++) {
+      col = col * 26 + (letter.charCodeAt(i) - 64);
+    }
+    return col - 1;
+  }
+
+  public getIO(): Server {
+    return this.io;
   }
 }
-
-// Export singleton instance
-let socketServer: SocketServer | null = null;
-
-export const initSocketServer = (httpServer: HttpServer): SocketServer => {
-  if (!socketServer) {
-    socketServer = new SocketServer(httpServer);
-    
-    // Nettoie les connexions inactives toutes les 5 minutes
-    setInterval(() => {
-      socketServer?.cleanupInactiveConnections();
-    }, 5 * 60 * 1000);
-  }
-  return socketServer;
-};
-
-export const getSocketServer = (): SocketServer | null => {
-  return socketServer;
-};

@@ -1,79 +1,71 @@
-import dotenv from 'dotenv';
 import { createServer } from 'http';
-import { createApp } from './app';
-import { initSocketServer } from './websocket/socket.server';
-import { logger } from './utils/logger';
+import dotenv from 'dotenv';
+import app from './app';
+import { WebSocketServer } from './websocket/socket.server';
+import { testConnection } from './config/database';
+import { CollaborationService } from './services/collaboration.service';
 
-// Load environment variables
 dotenv.config();
 
-// Create Express app
-const app = createApp();
-
-// Create HTTP server
-const httpServer = createServer(app);
-
-// Initialize WebSocket server
-const socketServer = initSocketServer(httpServer);
-
-// Port configuration
 const PORT = process.env.PORT || 3000;
+const WS_PORT = process.env.WS_PORT || 3001;
 
-// Graceful shutdown handler
-const gracefulShutdown = async (signal: string) => {
-  logger.info(`Received ${signal}, starting graceful shutdown...`);
-
-  // Stop accepting new connections
-  httpServer.close(async () => {
-    logger.info('HTTP server closed');
-
-    // Close WebSocket connections
-    if (socketServer) {
-      await socketServer.close();
+async function startServer() {
+  try {
+    // Test database connection
+    const dbConnected = await testConnection();
+    if (!dbConnected) {
+      console.error('Failed to connect to database. Exiting...');
+      process.exit(1);
     }
 
-    logger.info('Graceful shutdown completed');
-    process.exit(0);
-  });
+    // Create HTTP server
+    const server = createServer(app);
 
-  // Force shutdown after 30 seconds
-  setTimeout(() => {
-    logger.error('Forced shutdown after timeout');
+    // Initialize WebSocket server
+    new WebSocketServer(server);
+
+    // Start the server
+    server.listen(PORT, () => {
+      console.log(`🚀 REST API Server running on port ${PORT}`);
+      console.log(`🔌 WebSocket Server running on same port`);
+      console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`💾 Database: SQL Server connected`);
+    });
+
+    // Cleanup inactive sessions periodically
+    setInterval(async () => {
+      try {
+        const cleaned = await CollaborationService.cleanupInactiveSessions(30);
+        if (cleaned > 0) {
+          console.log(`Cleaned up ${cleaned} inactive sessions`);
+        }
+      } catch (error) {
+        console.error('Error cleaning up sessions:', error);
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
+
+    // Graceful shutdown
+    process.on('SIGTERM', () => {
+      console.log('SIGTERM signal received: closing HTTP server');
+      server.close(() => {
+        console.log('HTTP server closed');
+        process.exit(0);
+      });
+    });
+
+    process.on('SIGINT', () => {
+      console.log('SIGINT signal received: closing HTTP server');
+      server.close(() => {
+        console.log('HTTP server closed');
+        process.exit(0);
+      });
+    });
+
+  } catch (error) {
+    console.error('Failed to start server:', error);
     process.exit(1);
-  }, 30000);
-};
+  }
+}
 
-// Register shutdown handlers
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught Exception', {
-    message: error.message,
-    stack: error.stack
-  });
-  gracefulShutdown('uncaughtException');
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, _) => {
-  logger.error('Unhandled Rejection', { 
-    reason: reason instanceof Error ? reason.message : reason,
-    stack: reason instanceof Error ? reason.stack : undefined
-  });
-  gracefulShutdown('unhandledRejection');
-});
-
-// Start server
-httpServer.listen(PORT, () => {
-  logger.info(`
-    🚀 Server is running!
-    📡 HTTP Server: http://localhost:${PORT}
-    🔌 WebSocket Server: ws://localhost:${PORT}
-    🌍 Environment: ${process.env.NODE_ENV || 'development'}
-    📊 API URL: ${process.env.EXTERNAL_API_URL || 'Not configured'}
-  `);
-});
-
-export { httpServer, app, socketServer };
+startServer();
