@@ -167,7 +167,7 @@ export class SpreadsheetController {
   static async updateCell(req: Request, res: Response): Promise<void> {
     try {
       const { id, cellId } = req.params;
-      const [row, col] = this.parseCellId(cellId);
+      const [row, col] = SpreadsheetController.parseCellId(cellId);
       
       const cell = await SpreadsheetService.updateCell(
         id,
@@ -322,7 +322,7 @@ export class SpreadsheetController {
     if (!match) {
       throw new Error(`Invalid cell ID: ${cellId}`);
     }
-    const col = this.letterToColumn(match[1]);
+    const col = SpreadsheetController.letterToColumn(match[1]);
     const row = parseInt(match[2]) - 1;
     return [row, col];
   }
