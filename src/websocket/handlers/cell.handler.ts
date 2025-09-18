@@ -2,19 +2,22 @@ import { Socket } from 'socket.io';
 import { memoryStore } from '../../services/memory-store.service';
 import { conflictResolution } from '../../services/conflict-resolution.service';
 import { apiProxyService } from '../../services/api-proxy.service';
+import { hyperFormulaIntegration } from '../../services/hyperformula-integration.service';
+import { versionControl } from '../../services/version-control.service';
 import { Operation } from '../../types/collaboration.types';
 import { CellChange } from '../../types/spreadsheet.types';
 import { logger } from '../../utils/logger';
 import { hashCellId } from '../../utils/ot-transform';
+import { Cell } from '../../models/Cell.model';
 import { v4 as uuidv4 } from 'uuid';
 
 export class CellHandler {
   /**
-   * Gère les changements de cellule
+   * Gère les changements de cellule avec HyperFormula dual-engine
    */
   static async handleCellChange(socket: Socket, data: any): Promise<void> {
     try {
-      const { row, column, value, formula, format, changeType = 'value' } = data;
+      const { row, column, value, formula, format, changeType = 'value', baseVersion = 0 } = data;
       const spreadsheetId = socket.data.spreadsheetId;
       const userId = socket.data.userId || socket.id;
       const userName = socket.data.userName || 'Anonymous';
@@ -30,99 +33,82 @@ export class CellHandler {
         return;
       }
 
-      // Création de l'opération
-      const operation: Operation = {
-        id: uuidv4(),
-        type: 'update',
-        cellId: hashCellId(row, column),
-        row,
-        column,
-        value,
-        format,
-        timestamp: Date.now(),
-        userId,
-        version: 1
-      };
+      const cellAddress = Cell.generateCellId(row, column);
 
-      // Validation de l'opération
-      if (!conflictResolution.validateOperation(operation)) {
-        socket.emit('error', { message: 'Invalid operation' });
-        return;
+      try {
+        // Process through HyperFormula version control (dual-engine Step 2-3)
+        const versionedUpdate = await versionControl.processUpdate(
+          spreadsheetId,
+          {
+            address: cellAddress,
+            row,
+            col: column,
+            value,
+            formula,
+            baseVersion,
+            timestamp: Date.now(),
+            userId,
+            changeType: formula ? 'formula' : 'value'
+          }
+        );
+
+        // Step 4: Backend → All Clients - Broadcast (exact documentation format)
+        const broadcastData = {
+          address: cellAddress,
+          formula: formula,
+          value: versionedUpdate.calculatedValue,
+          version: versionedUpdate.resolvedVersion,
+          affectedCells: versionedUpdate.affectedCells,
+          // Additional context for frontend
+          raw_value: formula || value,
+          calculated_value: versionedUpdate.calculatedValue,
+          userId,
+          userName,
+          timestamp: Date.now(),
+          changeType,
+          conflicts: versionedUpdate.conflicts.hasConflict ? {
+            type: versionedUpdate.conflicts.conflictType,
+            resolution: versionedUpdate.conflicts.resolution
+          } : undefined
+        };
+
+        // Broadcast to other users
+        socket.to(`spreadsheet:${spreadsheetId}`).emit('cell-updated', broadcastData);
+
+        // Step 5: Frontend reconciliation data (exact documentation format)
+        socket.emit('cell-change-ack', {
+          address: cellAddress,
+          formula: formula,
+          value: versionedUpdate.calculatedValue,
+          version: versionedUpdate.resolvedVersion,
+          affectedCells: versionedUpdate.affectedCells,
+          conflicts: versionedUpdate.conflicts.hasConflict,
+          timestamp: Date.now()
+        });
+
+        logger.debug('Cell change processed with HyperFormula', {
+          spreadsheetId,
+          cellAddress,
+          userId,
+          version: versionedUpdate.resolvedVersion,
+          hasConflicts: versionedUpdate.conflicts.hasConflict
+        });
+
+        // Schedule database persistence
+        CellHandler.scheduleBatchSave(spreadsheetId, socket.data.token);
+
+      } catch (error) {
+        logger.error('Error processing cell change with HyperFormula', {
+          spreadsheetId,
+          cellAddress,
+          error: error instanceof Error ? error.message : String(error)
+        });
+
+        socket.emit('error', {
+          message: 'Failed to process cell change',
+          details: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
-
-      // Récupère les opérations en attente pour ce spreadsheet
-      const pendingChanges = memoryStore.getPendingChanges(spreadsheetId);
-      
-      // Transforme l'opération contre les changements en attente
-      if (pendingChanges.length > 0) {
-        const pendingOps = pendingChanges.map(change => ({
-          id: change.cellId,
-          type: 'update' as const,
-          cellId: change.cellId,
-          row: change.row,
-          column: change.column,
-          value: change.newValue,
-          timestamp: change.timestamp,
-          userId: change.userId,
-          version: 1,
-          format: undefined
-        }));
-
-        const result = conflictResolution.transformAgainstHistory(operation, pendingOps);
-        
-        if (result.conflicts.length > 0) {
-          logger.warn('Conflicts detected during cell change', {
-            conflicts: result.conflicts,
-            operation
-          });
-        }
-      }
-
-      // Création du changement
-      const cellChange: CellChange = {
-        cellId: operation.cellId,
-        row,
-        column,
-        oldValue: null, // Devrait être récupéré de l'état actuel
-        newValue: value,
-        timestamp: operation.timestamp,
-        userId,
-        changeType
-      };
-
-      // Ajoute le changement aux changements en attente
-      memoryStore.addPendingChange(spreadsheetId, cellChange);
-
-      // Diffuse le changement aux autres utilisateurs
-      socket.to(`spreadsheet:${spreadsheetId}`).emit('cell-updated', {
-        cellId: operation.cellId,
-        row,
-        column,
-        value,
-        formula,
-        format,
-        userId,
-        userName,
-        timestamp: operation.timestamp,
-        changeType
-      });
-
-      // Confirme au client qui a envoyé le changement
-      socket.emit('cell-change-ack', {
-        operationId: operation.id,
-        cellId: operation.cellId,
-        timestamp: operation.timestamp
-      });
-
-      logger.debug('Cell change processed', {
-        spreadsheetId,
-        cellId: operation.cellId,
-        userId,
-        userName
-      });
-
-      // Programme la sauvegarde batch (débounce)
-      CellHandler.scheduleBatchSave(spreadsheetId, socket.data.token);
 
     } catch (error) {
       logger.error('Error handling cell change', error);
@@ -210,9 +196,9 @@ export class CellHandler {
         operations.push(operation);
 
         cellChanges.push({
-          cellId: operation.cellId,
+          address: operation.cellId,
           row,
-          column,
+          col: column,
           oldValue: null,
           newValue: value,
           timestamp: operation.timestamp,
@@ -229,21 +215,26 @@ export class CellHandler {
         memoryStore.addPendingChange(spreadsheetId, change);
       }
 
-      // Diffuse les changements
+      // Broadcast batch changes following documentation format
       socket.to(`spreadsheet:${spreadsheetId}`).emit('bulk-cells-updated', {
-        changes: resolvedOperations.map(op => ({
-          cellId: op.cellId,
-          row: op.row,
-          column: op.column,
+        updates: resolvedOperations.map(op => ({
+          address: op.cellId,
+          formula: op.format, // This should be formula if available
           value: op.value,
-          format: op.format,
-          userId,
-          userName,
-          timestamp: op.timestamp
-        }))
+          version: op.version,
+          affectedCells: [] // Would be populated by actual dependency tracking
+        })),
+        userId,
+        userName,
+        timestamp: Date.now()
       });
 
       socket.emit('bulk-change-ack', {
+        updates: resolvedOperations.map(op => ({
+          address: op.cellId,
+          value: op.value,
+          version: op.version
+        })),
         operationCount: resolvedOperations.length,
         timestamp: Date.now()
       });

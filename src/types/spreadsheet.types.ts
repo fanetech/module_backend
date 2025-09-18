@@ -47,6 +47,20 @@ export interface CellFormat {
   numberFormat?: string;
 }
 
+export interface CellChange {
+  address: string;
+  row: number;
+  col: number;
+  value?: any;
+  formula?: string;
+  oldValue?: any;
+  newValue?: any;
+  timestamp: number;
+  userId: string;
+  userName?: string;
+  changeType: 'value' | 'formula' | 'format' | 'delete';
+}
+
 export interface CollaborationSession {
   id: string;
   spreadsheet_id: string;

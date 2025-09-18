@@ -1,7 +1,12 @@
 import { Request, Response } from 'express';
 import { SpreadsheetService } from '../services/spreadsheet.service';
 import { CollaborationService } from '../services/collaboration.service';
-import { ApiResponse, SpreadsheetData, BatchUpdate } from '../types/spreadsheet.types';
+import { hyperFormulaIntegration } from '../services/hyperformula-integration.service';
+import { hyperFormulaEngine } from '../services/hyperformula-engine.service';
+import { versionControl } from '../services/version-control.service';
+import { ApiResponse, SpreadsheetData } from '../types/spreadsheet.types';
+// Types are available but not currently used directly in controller
+// Will be used when implementing stricter typing in the future
 
 export class SpreadsheetController {
   // Get all spreadsheets
@@ -49,16 +54,45 @@ export class SpreadsheetController {
         spreadsheetData.active_users = activeUsers;
       }
 
-      // Calculate formulas
-      const calculatedValues = await SpreadsheetService.calculateFormulas(id);
-      
-      // Add calculated values to cells
+      // Initialize HyperFormula engine if not already done
+      try {
+        await hyperFormulaIntegration.initializeSpreadsheet(id);
+      } catch (error) {
+        // Engine might already be initialized, continue
+      }
+
+      // Get calculated values from HyperFormula
+      const calculatedValues = await hyperFormulaIntegration.getCalculatedValues(id);
+
+      // Add calculated values to cells and include version info
       spreadsheetData.cells = spreadsheetData.cells.map((cell: any) => {
         if (cell.formula && calculatedValues.has(cell.cell_id)) {
           cell.computed_value = String(calculatedValues.get(cell.cell_id));
         }
+        // Ensure version fields are included
+        if (!cell.version) cell.version = 1;
+        if (!cell.base_version) cell.base_version = 0;
         return cell;
       });
+
+      // Add HyperFormula engine state to response following documentation format
+      const engineState = hyperFormulaEngine.getEngineState();
+      spreadsheetData.hyperformula = {
+        version: engineState.version,
+        lastUpdated: engineState.lastUpdated,
+        cellCount: engineState.cellCount,
+        isInitialized: true
+      };
+
+      // Ensure cells include all documentation-specified fields
+      spreadsheetData.cells = spreadsheetData.cells.map((cell: any) => ({
+        ...cell,
+        address: cell.cell_id,
+        raw_value: cell.formula || cell.value,
+        calculated_value: cell.computed_value || cell.value,
+        version: cell.version || 1,
+        baseVersion: cell.base_version || 0
+      }));
 
       const response: ApiResponse<SpreadsheetData> = {
         success: true,
@@ -163,28 +197,35 @@ export class SpreadsheetController {
     }
   }
 
-  // Update cell
+  // Update cell with HyperFormula integration
   static async updateCell(req: Request, res: Response): Promise<void> {
     try {
       const { id, cellId } = req.params;
-      const [row, col] = SpreadsheetController.parseCellId(cellId);
-      
-      const cell = await SpreadsheetService.updateCell(
+      const { value, formula, user_id = 'api-user' } = req.body;
+
+      // Use HyperFormula integration for cell updates
+      const result = await hyperFormulaIntegration.updateCellWithFormula(
         id,
-        { ...req.body, row, col },
-        req.body.user_id
+        cellId,
+        value,
+        formula,
+        user_id
       );
 
-      // Recalculate formulas if needed
-      if (req.body.formula || req.body.value) {
-        await SpreadsheetService.calculateFormulas(id);
-      }
-
+      // Format response according to documentation specification
       const response: ApiResponse<any> = {
         success: true,
-        data: cell
+        data: {
+          address: cellId,
+          formula: result.cell.formula,
+          value: result.calculatedValue,
+          version: result.version,
+          affectedCells: result.affectedCells,
+          raw_value: result.cell.formula || result.cell.value,
+          calculated_value: result.calculatedValue
+        }
       };
-      
+
       res.json(response);
     } catch (error) {
       console.error('Error updating cell:', error);
@@ -197,26 +238,49 @@ export class SpreadsheetController {
     }
   }
 
-  // Batch update cells
+  // Batch update cells with HyperFormula integration
   static async batchUpdateCells(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const batchUpdate: BatchUpdate = {
-        spreadsheet_id: id,
-        updates: req.body.updates,
-        user_id: req.body.user_id
-      };
+      const { updates, user_id = 'api-user' } = req.body;
 
-      const cells = await SpreadsheetService.batchUpdateCells(batchUpdate);
+      if (!Array.isArray(updates) || updates.length === 0) {
+        const response: ApiResponse<any> = {
+          success: false,
+          error: 'Valid updates array is required'
+        };
+        res.status(400).json(response);
+        return;
+      }
 
-      // Recalculate formulas
-      await SpreadsheetService.calculateFormulas(id);
+      // Transform frontend format (cell_id) to service format (address)
+      const transformedUpdates = updates.map(update => ({
+        address: update.cell_id,
+        value: update.value,
+        formula: update.formula
+      }));
 
+      // Use HyperFormula integration for batch updates
+      const result = await hyperFormulaIntegration.batchUpdateCells(id, transformedUpdates, user_id);
+
+      // Format batch response according to documentation
       const response: ApiResponse<any> = {
         success: true,
-        data: cells
+        data: {
+          updates: result.updatedCells.map(cell => ({
+            address: cell.cell_id,
+            formula: cell.formula,
+            value: cell.computed_value,
+            version: cell.version,
+            raw_value: cell.formula || cell.value,
+            calculated_value: cell.computed_value
+          })),
+          globalVersion: result.globalVersion,
+          totalConflicts: result.totalConflicts,
+          processedCount: result.updatedCells.length
+        }
       };
-      
+
       res.json(response);
     } catch (error) {
       console.error('Error batch updating cells:', error);
@@ -289,21 +353,33 @@ export class SpreadsheetController {
     }
   }
 
-  // Calculate formulas
+  // Calculate formulas using HyperFormula
   static async calculateFormulas(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      
-      const results = await SpreadsheetService.calculateFormulas(id);
-      
+
+      // Get calculated values from HyperFormula engine
+      const results = await hyperFormulaIntegration.getCalculatedValues(id);
+      const engineState = hyperFormulaEngine.getEngineState();
+
+      // Format calculation response according to documentation
       const response: ApiResponse<any> = {
         success: true,
-        data: Array.from(results.entries()).map(([cellId, value]: [string, any]) => ({
-          cell_id: cellId,
-          computed_value: value
-        }))
+        data: {
+          calculations: Array.from(results.entries()).map(([address, value]: [string, any]) => ({
+            address,
+            calculated_value: value,
+            formula: null, // Will be populated if available
+            version: engineState.version
+          })),
+          engine_state: {
+            version: engineState.version,
+            lastUpdated: engineState.lastUpdated,
+            cellCount: engineState.cellCount
+          }
+        }
       };
-      
+
       res.json(response);
     } catch (error) {
       console.error('Error calculating formulas:', error);
@@ -334,5 +410,151 @@ export class SpreadsheetController {
       col = col * 26 + (letter.charCodeAt(i) - 64);
     }
     return col - 1;
+  }
+
+  // Validate formula syntax
+  static async validateFormula(req: Request, res: Response): Promise<void> {
+    try {
+      const { formula } = req.body;
+
+      if (!formula || typeof formula !== 'string') {
+        const response: ApiResponse<any> = {
+          success: false,
+          error: 'Formula string is required'
+        };
+        res.status(400).json(response);
+        return;
+      }
+
+      const validation = hyperFormulaIntegration.validateFormula(formula);
+
+      const response: ApiResponse<any> = {
+        success: true,
+        data: {
+          formula,
+          valid: validation.valid,
+          error: validation.error
+        }
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error('Error validating formula:', error);
+      const response: ApiResponse<any> = {
+        success: false,
+        error: 'Failed to validate formula',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      };
+      res.status(500).json(response);
+    }
+  }
+
+  // Get spreadsheet data in 2D array format (Handsontable compatible)
+  static async getSpreadsheetData(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { maxRows = 1000, maxCols = 26 } = req.query;
+
+      // Initialize HyperFormula if needed
+      try {
+        await hyperFormulaIntegration.initializeSpreadsheet(id);
+      } catch (error) {
+        // Engine might already be initialized
+      }
+
+      const spreadsheetData = hyperFormulaIntegration.getSpreadsheetArray(
+        Number(maxRows),
+        Number(maxCols)
+      );
+
+      const engineState = hyperFormulaEngine.getEngineState();
+
+      // Format spreadsheet data response according to documentation
+      const response: ApiResponse<any> = {
+        success: true,
+        data: {
+          spreadsheetData, // 2D array format for Handsontable compatibility
+          dimensions: {
+            rows: Number(maxRows),
+            cols: Number(maxCols)
+          },
+          version: engineState.version,
+          lastUpdated: engineState.lastUpdated,
+          cellCount: engineState.cellCount
+        }
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error('Error getting spreadsheet data:', error);
+      const response: ApiResponse<any> = {
+        success: false,
+        error: 'Failed to get spreadsheet data',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      };
+      res.status(500).json(response);
+    }
+  }
+
+  // Get HyperFormula engine status
+  static async getEngineStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const status = hyperFormulaIntegration.getEngineStatus();
+      const versionStatus = versionControl.getVersionStatus(id);
+
+      const response: ApiResponse<any> = {
+        success: true,
+        data: {
+          spreadsheetId: id,
+          engine: status,
+          versionControl: versionStatus,
+          isHealthy: status.isHealthy
+        }
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error('Error getting engine status:', error);
+      const response: ApiResponse<any> = {
+        success: false,
+        error: 'Failed to get engine status',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      };
+      res.status(500).json(response);
+    }
+  }
+
+  // Initialize HyperFormula engine for spreadsheet
+  static async initializeEngine(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+
+      await hyperFormulaIntegration.initializeSpreadsheet(id);
+      const engineState = hyperFormulaEngine.getEngineState();
+
+      const response: ApiResponse<any> = {
+        success: true,
+        data: {
+          spreadsheetId: id,
+          initialized: true,
+          engine_state: {
+            version: engineState.version,
+            lastUpdated: engineState.lastUpdated,
+            cellCount: engineState.cellCount
+          }
+        }
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error('Error initializing engine:', error);
+      const response: ApiResponse<any> = {
+        success: false,
+        error: 'Failed to initialize HyperFormula engine',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      };
+      res.status(500).json(response);
+    }
   }
 }

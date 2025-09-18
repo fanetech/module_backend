@@ -28,6 +28,8 @@ export interface ICell {
   format?: CellFormat | null;
   data_type?: string | null;
   is_locked?: boolean;
+  version?: number;
+  base_version?: number;
   created_at?: Date;
   updated_at?: Date;
   updated_by?: string | null;
@@ -45,6 +47,8 @@ export class Cell implements ICell {
   format?: CellFormat | null;
   data_type?: string | null;
   is_locked: boolean;
+  version: number;
+  base_version: number;
   created_at?: Date;
   updated_at?: Date;
   updated_by?: string | null;
@@ -61,6 +65,8 @@ export class Cell implements ICell {
     this.format = data.format || null;
     this.data_type = data.data_type || null;
     this.is_locked = data.is_locked || false;
+    this.version = data.version || 1;
+    this.base_version = data.base_version || 0;
     this.created_at = data.created_at;
     this.updated_at = data.updated_at;
     this.updated_by = data.updated_by || null;
@@ -87,6 +93,8 @@ export class Cell implements ICell {
         table.json('format'); // Store formatting as JSON
         table.string('data_type', 50); // number, text, date, boolean, formula
         table.boolean('is_locked').defaultTo(false);
+        table.integer('version').defaultTo(1); // Version for conflict resolution
+        table.integer('base_version').defaultTo(0); // Base version for conflict detection
         table.timestamp('created_at').defaultTo(db.fn.now());
         table.timestamp('updated_at').defaultTo(db.fn.now());
         table.string('updated_by', 255);

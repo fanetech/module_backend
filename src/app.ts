@@ -52,8 +52,14 @@ app.post('/api/spreadsheets/:id/cells/batch', SpreadsheetController.batchUpdateC
 app.get('/api/spreadsheets/:id/cells/range', SpreadsheetController.getCellsInRange);
 app.get('/api/spreadsheets/:id/cells/history', SpreadsheetController.getCellHistory);
 
-// Formula calculation
+// Formula calculation with HyperFormula
 app.post('/api/spreadsheets/:id/calculate', SpreadsheetController.calculateFormulas);
+
+// HyperFormula integrated endpoints
+app.post('/api/spreadsheets/:id/init-engine', SpreadsheetController.initializeEngine);
+app.get('/api/spreadsheets/:id/data', SpreadsheetController.getSpreadsheetData);
+app.get('/api/spreadsheets/:id/engine-status', SpreadsheetController.getEngineStatus);
+app.post('/api/spreadsheets/validate-formula', SpreadsheetController.validateFormula);
 
 // Collaboration routes
 app.post('/api/collaboration/:spreadsheetId/join', CollaborationController.joinSession);
